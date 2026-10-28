@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>すごろく 確率 統計 ゲーム</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-amber-50 min-h-screen">
+<div class="max-w-4xl mx-auto p-4">
+  <h1 class="text-3xl font-bold text-center mb-2 text-amber-800">🎲 すごろく 確率統計</h1>
+  <p class="text-center text-amber-600 mb-4 text-sm">Sugoroku Board Game + Statistics</p>
+
+  <div class="flex gap-4 mb-4">
+    <!-- Left: Board + Controls -->
+    <div class="flex-1">
+      <canvas id="boardCanvas" width="480" height="420" class="rounded-xl shadow-lg border-2 border-amber-300 w-full"></canvas>
+
+      <!-- Player Setup -->
+      <div id="setupPanel" class="bg-white rounded-xl p-4 mt-4 shadow">
+        <div class="flex items-center gap-3 mb-3">
+          <label class="text-sm font-bold text-amber-800" for="playerCount">プレイヤー数:</label>
+          <select id="playerCount" aria-label="プレイヤー数選択" class="bg-amber-50 border border-amber-300 rounded p-1 text-sm">
+            <option value="1">1人</option>
+            <option value="2" selected>2人</option>
+            <option value="3">3人</option>
+            <option value="4">4人</option>
+          </select>
+          <button id="startGameBtn" aria-label="ゲームを開始" class="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 rounded-lg transition text-sm">
+            ゲーム開始
+          </button>
+        </div>
+        <div id="playerNames" class="grid grid-cols-2 gap-2"></div>
+      </div>
+
+      <!-- Game Controls -->
+      <div id="gamePanel" class="hidden bg-white rounded-xl p-4 mt-4 shadow">
+        <div id="currentPlayerInfo" class="text-center mb-3">
+          <span id="currentPlayerName" class="font-bold text-lg"></span>のターン
+        </div>
+        <div id="diceDisplay" class="text-center text-6xl mb-3">🎲</div>
+        <button id="rollBtn" aria-label="サイコロを振る" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl text-lg transition mb-3">
+          サイコロを振る！
+        </button>
+        <div id="diceResult" class="text-center text-sm text-gray-600 mb-2"></div>
+        <div id="playerStatus" class="grid grid-cols-2 gap-2 text-xs"></div>
+      </div>
+    </div>
+
+    <!-- Right: Stats Panel -->
+    <div class="w-64">
+      <div class="bg-white rounded-xl p-4 shadow mb-4">
+        <h3 class="font-bold text-amber-800 mb-3 text-sm">📊 サイコロ出目</h3>
+        <div id="diceHeatmap" class="space-y-1"></div>
+        <div class="text-xs text-gray-400 mt-2">総投数: <span id="totalRolls">0</span></div>
+      </div>
+
+      <div class="bg-white rounded-xl p-4 shadow mb-4">
+        <h3 class="font-bold text-amber-800 mb-2 text-sm">📈 期待値情報</h3>
+        <div id="expectedInfo" class="text-xs text-gray-700 space-y-1"></div>
+      </div>
+
+      <div class="bg-white rounded-xl p-4 shadow">
+        <h3 class="font-bold text-amber-800 mb-2 text-sm">🔬 モンテカルロ</h3>
+        <button id="simBtn" aria-label="1000回シミュレーション" class="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold py-2 rounded-lg mb-2 transition">
+          1000回シミュレーション
+        </button>
+        <canvas id="histCanvas" width="220" height="120" class="rounded border border-gray-200"></canvas>
+        <div id="simResult" class="text-xs text-gray-600 mt-1"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Win Screen -->
+  <div id="winScreen" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-2xl p-8 text-center shadow-2xl max-w-sm mx-4">
+      <div class="text-6xl mb-4">🎉</div>
+      <h2 class="text-2xl font-bold text-amber-800 mb-2">ゴール！</h2>
+      <div id="winnerName" class="text-xl text-amber-600 font-bold mb-4"></div>
+      <button id="playAgainBtn" aria-label="もう一度プレイ" class="bg-amber-600 hover:bg-amber-500 text-white font-bold py-3 px-8 rounded-xl transition">
+        もう一度
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+const TOTAL_SQUARES = 30;
+const COLORS = ['#ef4444','#3b82f6','#22c55e','#f59e0b'];
+const DICE_FACES = ['⚀','⚁','⚂','⚃','⚄','⚅'];
+
+let players = [];
+let currentPlayer = 0;
+let diceCounts = [0,0,0,0,0,0];
+let totalRolls = 0;
+let gameRunning = false;
+
+// Load saved data
+const saved = JSON.parse(localStorage.getItem('sugoroku_data') || '{"diceCounts":[0,0,0,0,0,0],"totalRolls":0}');
+diceCounts = saved.diceCounts;
+totalRolls = saved.totalRolls;
+
+const boardCanvas = document.getElementById('boardCanvas');
+const bCtx = boardCanvas.getContext('2d');
+
+function drawBoard() {
+  const ctx = bCtx;
+  const W = boardCanvas.width, H = boardCanvas.height;
+  ctx.fillStyle = '#fef3c7';
+  ctx.fillRect(0, 0, W, H);
+
+  // Draw squares: 6 per row, 5 rows = 30 squares
+  const cols = 6, rows = 5;
+  const sw = (W - 40) / cols, sh = (H - 60) / rows;
+  const ox = 20, oy = 30;
+
+  // Snake path: row 0: L→R, row 1: R→L, etc.
+  const squares = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const col = (rows - 1 - r) % 2 === 0 ? c : (cols - 1 - c);
+      squares.push({ x: ox + col * sw, y: oy + (rows - 1 - r) * sh, num: r * cols + c + 1 });
+    }
+  }
+
+  squares.forEach((sq, i) => {
+    const isStart = i === 0, isGoal = i === TOTAL_SQUARES - 1;
+    ctx.fillStyle = isGoal ? '#86efac' : isStart ? '#fde68a' : (i % 2 === 0 ? '#fff7ed' : '#fef9c3');
+    ctx.strokeStyle = '#d97706';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(sq.x + 1, sq.y + 1, sw - 2, sh - 2, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = isGoal ? '#15803d' : '#92400e';
+    ctx.font = `bold ${Math.min(sw, sh) * 0.25}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(isGoal ? 'GOAL' : sq.num, sq.x + sw / 2, sq.y + 3);
+  });
+
+  // Draw player tokens
+  players.forEach((p, pi) => {
+    if (p.pos >= 0 && p.pos < TOTAL_SQUARES) {
+      const sq = squares[p.pos];
+      const offset = pi * (sw / (players.length + 1)) + sw / (players.length + 1);
+      ctx.beginPath();
+      ctx.arc(sq.x + offset, sq.y + sh * 0.65, Math.min(sw, sh) * 0.18, 0, Math.PI * 2);
+      ctx.fillStyle = COLORS[pi];
+      ctx.fill();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = 'white';
+      ctx.font = `bold ${Math.min(sw, sh) * 0.18}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(pi + 1, sq.x + offset, sq.y + sh * 0.65);
+    }
+  });
+}
+
+function setupPlayerNames() {
+  const n = parseInt(document.getElementById('playerCount').value);
+  const container = document.getElementById('playerNames');
+  container.innerHTML = '';
+  for (let i = 0; i < n; i++) {
+    const div = document.createElement('div');
+    div.className = 'flex items-center gap-2';
+    const dot = document.createElement('div');
+    dot.className = 'w-4 h-4 rounded-full flex-shrink-0';
+    dot.style.backgroundColor = COLORS[i];
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = `プレイヤー${i + 1}`;
+    input.setAttribute('aria-label', `プレイヤー${i + 1}の名前`);
+    input.className = 'flex-1 border border-amber-300 rounded p-1 text-sm bg-amber-50';
+    div.appendChild(dot);
+    div.appendChild(input);
+    container.appendChild(div);
+  }
+}
+
+document.getElementById('playerCount').addEventListener('change', setupPlayerNames);
+setupPlayerNames();
+drawBoard();
+
+document.getElementById('startGameBtn').addEventListener('click', () => {
+  const n = parseInt(document.getElementById('playerCount').value);
+  const inputs = document.getElementById('playerNames').querySelectorAll('input');
+  players = [];
+  for (let i = 0; i < n; i++) {
+    players.push({ name: inputs[i].value || `P${i + 1}`, pos: 0, turnsToGoal: null });
+  }
+  currentPlayer = 0;
+  gameRunning = true;
+
+  document.getElementById('setupPanel').classList.add('hidden');
+  document.getElementById('gamePanel').classList.remove('hidden');
+  updateGameUI();
+  drawBoard();
+  updateExpectedInfo();
+  renderHeatmap();
+});
+
+function updateGameUI() {
+  const p = players[currentPlayer];
+  document.getElementById('currentPlayerName').textContent = escapeHtml(p.name);
+  document.getElementById('currentPlayerName').style.color = COLORS[currentPlayer];
+
+  const statusDiv = document.getElementById('playerStatus');
+  statusDiv.innerHTML = '';
+  players.forEach((pl, i) => {
+    const div = document.createElement('div');
+    div.className = 'flex items-center gap-1 p-1 rounded';
+    div.style.backgroundColor = COLORS[i] + '22';
+    div.innerHTML = `<span class="w-3 h-3 rounded-full inline-block" style="background:${COLORS[i]}"></span>
+      <span class="font-bold">${escapeHtml(pl.name)}</span>: ${pl.pos}/${TOTAL_SQUARES - 1}マス
+      <span class="text-gray-400">(残${TOTAL_SQUARES - 1 - pl.pos})</span>`;
+    statusDiv.appendChild(div);
+  });
+}
+
+function rollDice() {
+  if (!gameRunning) return;
+  const btn = document.getElementById('rollBtn');
+  btn.disabled = true;
+
+  let count = 0;
+  const interval = setInterval(() => {
+    const r = Math.floor(Math.random() * 6);
+    document.getElementById('diceDisplay').textContent = DICE_FACES[r];
+    count++;
+    if (count > 8) {
+      clearInterval(interval);
+      const val = Math.floor(Math.random() * 6) + 1;
+      document.getElementById('diceDisplay').textContent = DICE_FACES[val - 1];
+
+      // Record
+      diceCounts[val - 1]++;
+      totalRolls++;
+      localStorage.setItem('sugoroku_data', JSON.stringify({ diceCounts, totalRolls }));
+
+      const p = players[currentPlayer];
+      const oldPos = p.pos;
+      p.pos = Math.min(p.pos + val, TOTAL_SQUARES - 1);
+
+      document.getElementById('diceResult').textContent =
+        `${escapeHtml(p.name)} が ${val} を出して ${oldPos} → ${p.pos} マスへ移動！`;
+
+      renderHeatmap();
+      document.getElementById('totalRolls').textContent = totalRolls;
+      updateExpectedInfo();
+      drawBoard();
+      updateGameUI();
+
+      if (p.pos >= TOTAL_SQUARES - 1) {
+        gameRunning = false;
+        document.getElementById('winnerName').textContent = `🎊 ${escapeHtml(p.name)} の勝利！`;
+        document.getElementById('winScreen').classList.remove('hidden');
+      } else {
+        currentPlayer = (currentPlayer + 1) % players.length;
+        updateGameUI();
+        btn.disabled = false;
+      }
+    }
+  }, 80);
+}
+
+document.getElementById('rollBtn').addEventListener('click', rollDice);
+
+function renderHeatmap() {
+  const div = document.getElementById('diceHeatmap');
+  div.innerHTML = '';
+  const maxCount = Math.max(...diceCounts, 1);
+  for (let i = 0; i < 6; i++) {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2';
+    const label = document.createElement('span');
+    label.className = 'text-lg w-6';
+    label.textContent = DICE_FACES[i];
+    const bar = document.createElement('div');
+    bar.className = 'flex-1 bg-gray-200 rounded overflow-hidden h-4';
+    const fill = document.createElement('div');
+    const ratio = diceCounts[i] / maxCount;
+    fill.style.width = (ratio * 100) + '%';
+    fill.style.height = '100%';
+    const hue = Math.round(ratio * 120);
+    fill.style.backgroundColor = `hsl(${hue},70%,50%)`;
+    bar.appendChild(fill);
+    const count = document.createElement('span');
+    count.className = 'text-xs text-gray-500 w-8 text-right';
+    count.textContent = diceCounts[i];
+    row.appendChild(label);
+    row.appendChild(bar);
+    row.appendChild(count);
+    div.appendChild(row);
+  }
+}
+
+function updateExpectedInfo() {
+  const expMoves = (1 + 6) / 2; // E[dice] = 3.5
+  const info = document.getElementById('expectedInfo');
+  const lines = [
+    `1回の期待値: 3.5マス`,
+    `30マスゴールまでの期待手数: ${(TOTAL_SQUARES / expMoves).toFixed(1)}回`,
+  ];
+  if (players.length > 0) {
+    players.forEach((p, i) => {
+      const rem = TOTAL_SQUARES - 1 - p.pos;
+      lines.push(`${p.name}: 残${rem}マス → 期待${(rem / expMoves).toFixed(1)}手`);
+    });
+  }
+  info.innerHTML = lines.map(l => `<div>${escapeHtml(l)}</div>`).join('');
+}
+
+// Monte Carlo simulation
+document.getElementById('simBtn').addEventListener('click', () => {
+  const N = 1000;
+  const turnCounts = [];
+  for (let i = 0; i < N; i++) {
+    let pos = 0, turns = 0;
+    while (pos < TOTAL_SQUARES - 1) {
+      pos = Math.min(pos + Math.floor(Math.random() * 6) + 1, TOTAL_SQUARES - 1);
+      turns++;
+    }
+    turnCounts.push(turns);
+  }
+  const avg = turnCounts.reduce((a, b) => a + b, 0) / N;
+  const min = Math.min(...turnCounts), max = Math.max(...turnCounts);
+
+  // Draw histogram
+  const hc = document.getElementById('histCanvas');
+  const ctx = hc.getContext('2d');
+  ctx.clearRect(0, 0, hc.width, hc.height);
+
+  const buckets = {};
+  turnCounts.forEach(t => { buckets[t] = (buckets[t] || 0) + 1; });
+  const keys = Object.keys(buckets).map(Number).sort((a, b) => a - b);
+  const maxV = Math.max(...Object.values(buckets));
+  const bw = hc.width / keys.length;
+
+  keys.forEach((k, i) => {
+    const h = (buckets[k] / maxV) * (hc.height - 20);
+    ctx.fillStyle = `hsl(${200 + i * 2},70%,55%)`;
+    ctx.fillRect(i * bw, hc.height - h - 10, bw - 1, h);
+    if (i % 3 === 0) {
+      ctx.fillStyle = '#666';
+      ctx.font = '8px sans-serif';
+      ctx.fillText(k, i * bw, hc.height - 2);
+    }
+  });
+
+  document.getElementById('simResult').textContent =
+    `平均: ${avg.toFixed(1)}手 (最小:${min} 最大:${max})`;
+});
+
+renderHeatmap();
+updateExpectedInfo();
+
+document.getElementById('playAgainBtn').addEventListener('click', () => {
+  document.getElementById('winScreen').classList.add('hidden');
+  document.getElementById('gamePanel').classList.add('hidden');
+  document.getElementById('setupPanel').classList.remove('hidden');
+  players = [];
+  drawBoard();
+  setupPlayerNames();
+});
+</script>
+</body>
+</html>
